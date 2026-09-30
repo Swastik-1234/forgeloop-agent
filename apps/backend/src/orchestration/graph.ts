@@ -6,6 +6,7 @@ import { getTools, type Emit } from "../tools/tool.js";
 import { plan_prompt } from "../prompts/plan_prompt.js";
 import { system_message } from "../prompts/system_message.js";
 import { llm } from "../config/llm.js";
+import { estimateTokens, recordUsage, waitForBudget } from "../config/rate-limiter.js";
 import type { GraphState } from "../types/state.type.js";
 import { StateAnnotation } from "../types/state.type.js";
 import { MemorySaver } from "@langchain/langgraph";
@@ -63,6 +64,35 @@ async function invokeWithRateLimitRetry<T>(
   throw new Error("Unreachable");
 }
 
+const COMPLETION_TOKEN_BUDGET = 1024; // matches llm's maxTokens
+
+// Proactively paces calls to stay under Groq's free-tier 8000 tokens/min
+// cap (estimate + wait before calling), then still falls back to the
+// reactive retry above as a safety net for estimation error or other
+// processes sharing the same account's quota.
+async function callLLMWithBudget<T extends { content: unknown }>(
+  fn: () => Promise<T>,
+  inputText: string,
+  emit: Emit
+): Promise<T> {
+  const estimatedInput = estimateTokens(inputText);
+  await waitForBudget(estimatedInput + COMPLETION_TOKEN_BUDGET, (waitMs) => {
+    emit({
+      e: "stage_update",
+      stage: "executing",
+      message: `Pacing requests to stay within Groq's free-tier limit — waiting ${Math.round(waitMs / 1000)}s...`,
+      progress: 40,
+    });
+  });
+
+  const response = await invokeWithRateLimitRetry(fn, emit);
+
+  const usage = (response as any).usage_metadata?.total_tokens;
+  recordUsage(usage ?? estimatedInput + COMPLETION_TOKEN_BUDGET);
+
+  return response;
+}
+
 export default async function createAgentGraph({
   projectId,
   model,
@@ -99,8 +129,9 @@ export default async function createAgentGraph({
       : plan_prompt;
 
     try {
-      const response = await invokeWithRateLimitRetry(
+      const response = await callLLMWithBudget(
         () => llm.invoke([new HumanMessage(prompt)]),
+        prompt,
         doEmit
       );
 
@@ -130,12 +161,19 @@ export default async function createAgentGraph({
         throw new Error("No messages provided to agentNode");
       }
 
-      const response = await invokeWithRateLimitRetry(
+      const inputText =
+        systemPrompt +
+        state.messages
+          .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)))
+          .join("\n");
+
+      const response = await callLLMWithBudget(
         () =>
           modelWithTools.invoke([
             new SystemMessage(systemPrompt),
             ...state.messages,
           ]),
+        inputText,
         doEmit
       );
 

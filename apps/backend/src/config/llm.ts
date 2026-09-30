@@ -8,6 +8,9 @@ export const llm = new ChatOpenAI({
   model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
   temperature: 0.7,
   streaming: false,
+  // Bounds completion size so a single call can't eat a large chunk of the
+  // free tier's 8000 tokens/min budget on its own.
+  maxTokens: 1024,
   apiKey: process.env.GROQ_API_KEY || "",
   configuration: {
     baseURL: "https://api.groq.com/openai/v1",
