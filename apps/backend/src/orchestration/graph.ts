@@ -14,6 +14,55 @@ const memorySaver = new MemorySaver();
 
 const noopEmit: Emit = () => {};
 
+// Two transient Groq/free-model quirks worth retrying instead of failing
+// the whole run: (1) the free tier caps requests at 8000 tokens/minute
+// account-wide, easy to hit mid-run; (2) smaller open-weight models
+// occasionally emit malformed tool-call JSON that fails to parse — a
+// one-off model hiccup, not a logic error, and usually succeeds on retry.
+async function invokeWithRateLimitRetry<T>(
+  fn: () => Promise<T>,
+  emit: Emit,
+  maxRetries = 3
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const message: string = error?.message || String(error);
+      const isRateLimit = error?.status === 429 || /rate limit/i.test(message);
+      const isMalformedToolCall =
+        error?.status === 400 && /parse tool call arguments/i.test(message);
+
+      if ((!isRateLimit && !isMalformedToolCall) || attempt === maxRetries) {
+        throw error;
+      }
+
+      let waitMs = 3000;
+      if (isRateLimit) {
+        const match = message.match(/try again in ([\d.]+)(ms|s|m)/i);
+        waitMs = 15000;
+        if (match && match[1] && match[2]) {
+          const value = parseFloat(match[1]);
+          const unit = match[2].toLowerCase();
+          waitMs = unit === "ms" ? value : unit === "m" ? value * 60000 : value * 1000;
+        }
+        waitMs = Math.min(Math.max(waitMs, 2000), 60000) + 1000; // small buffer, capped
+      }
+
+      emit({
+        e: "stage_update",
+        stage: "executing",
+        message: isRateLimit
+          ? `Groq rate limit hit — waiting ${Math.round(waitMs / 1000)}s before retrying...`
+          : "Model returned a malformed response — retrying...",
+        progress: 40,
+      });
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw new Error("Unreachable");
+}
+
 export default async function createAgentGraph({
   projectId,
   model,
@@ -50,7 +99,10 @@ export default async function createAgentGraph({
       : plan_prompt;
 
     try {
-      const response = await llm.invoke([new HumanMessage(prompt)]);
+      const response = await invokeWithRateLimitRetry(
+        () => llm.invoke([new HumanMessage(prompt)]),
+        doEmit
+      );
 
       const planContent =
         typeof response.content === "string"
@@ -78,10 +130,14 @@ export default async function createAgentGraph({
         throw new Error("No messages provided to agentNode");
       }
 
-      const response = await modelWithTools.invoke([
-        new SystemMessage(systemPrompt),
-        ...state.messages,
-      ]);
+      const response = await invokeWithRateLimitRetry(
+        () =>
+          modelWithTools.invoke([
+            new SystemMessage(systemPrompt),
+            ...state.messages,
+          ]),
+        doEmit
+      );
 
       if (!response) {
         throw new Error("Model returned undefined response");

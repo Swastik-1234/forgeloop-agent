@@ -278,10 +278,12 @@ function createListDirectoriesTool(sandbox: Sandbox, emit: Emit) {
       const toolName = TOOL_EVENT_NAME.list_directories;
       emit({ e: "tool_started", tool: toolName, input: { path } });
       try {
-        const cmd = `tree -I 'node_modules|.*' ${path}`;
-        const tree = await sandbox.commands.run(cmd);
+        // `tree` isn't installed in the E2B base image; `find` is
+        // universally available and gives an equivalent listing.
+        const cmd = `find ${path} -not -path '*/node_modules/*' -not -path '*/.*' | sort`;
+        const result = await sandbox.commands.run(cmd);
         emit({ e: "tool_completed", tool: toolName, output: "Listed directory" });
-        return `Directory structure:\n${tree}`;
+        return `Directory structure:\n${result.stdout}`;
       } catch (e) {
         emit({ e: "tool_error", tool: toolName, error: String(e) });
         return `Failed to list directory ${path}: ${e}`;

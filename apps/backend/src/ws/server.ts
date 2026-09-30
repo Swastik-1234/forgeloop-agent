@@ -26,7 +26,7 @@ function safeSend(ws: WebSocket, event: Record<string, any>) {
 export function attachWebSocketServer(server: HttpServer) {
   const wss = new WebSocketServer({ server });
 
-  wss.on("connection", async (ws, req) => {
+  wss.on("connection", (ws, req) => {
     const url = new URL(req.url || "", "http://localhost");
     const projectId = url.searchParams.get("projectId");
     const queryToken = url.searchParams.get("token");
@@ -52,15 +52,16 @@ export function attachWebSocketServer(server: HttpServer) {
       return;
     }
 
-    const project = await prisma.project.findUnique({ where: { id: projectId, userId } });
-    if (!project) {
-      ws.close(4003, "Access denied to this project");
-      return;
-    }
+    // The message listener must be attached synchronously, before any
+    // await — the client can send messages the instant it sees "open",
+    // and ws emits "message" with no replay buffer, so a listener
+    // attached after an await can silently miss the first message(s).
+    // Auth's DB check is async, so we buffer raw messages until it
+    // resolves, then drain them through the same handler in order.
+    let ready = false;
+    const backlog: Buffer[] = [];
 
-    safeSend(ws, { e: "connected", authenticated: true });
-
-    ws.on("message", async (raw) => {
+    const handleMessage = async (raw: Buffer) => {
       let parsed: any;
       try {
         parsed = JSON.parse(raw.toString());
@@ -110,7 +111,36 @@ export function attachWebSocketServer(server: HttpServer) {
       }
 
       safeSend(ws, { e: "error", message: `Unknown message type: ${parsed.type}` });
+    };
+
+    ws.on("message", (raw: Buffer) => {
+      if (!ready) {
+        backlog.push(raw);
+        return;
+      }
+      handleMessage(raw);
     });
+
+    prisma.project
+      .findUnique({ where: { id: projectId, userId } })
+      .then((project) => {
+        if (!project) {
+          ws.close(4003, "Access denied to this project");
+          return;
+        }
+
+        ready = true;
+        safeSend(ws, { e: "connected", authenticated: true });
+
+        while (backlog.length > 0) {
+          const next = backlog.shift();
+          if (next) handleMessage(next);
+        }
+      })
+      .catch((err) => {
+        console.error("WS auth DB check failed:", err);
+        ws.close(1011, "Internal error");
+      });
   });
 
   return wss;
