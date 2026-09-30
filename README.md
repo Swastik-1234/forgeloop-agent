@@ -1,4 +1,4 @@
-# Likeable — AI App Builder (Lovable clone)
+# Likeable — AI App Builder (Lovable end to end)
 
 An AI coding agent that builds React apps from a natural-language prompt, the same way Lovable/v0/bolt.new work: describe what you want, the agent plans, writes code, installs dependencies, and runs it live in a cloud sandbox — with the results streamed to you in real time.
 
