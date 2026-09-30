@@ -23,18 +23,39 @@ const noopEmit: Emit = () => {};
 async function invokeWithRateLimitRetry<T>(
   fn: () => Promise<T>,
   emit: Emit,
-  maxRetries = 3
+  maxRateLimitRetries = 3,
+  maxMalformedRetries = 6
 ): Promise<T> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  let rateLimitAttempts = 0;
+  let malformedAttempts = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
     try {
       return await fn();
     } catch (error: any) {
       const message: string = error?.message || String(error);
       const isRateLimit = error?.status === 429 || /rate limit/i.test(message);
+      // gpt-oss models occasionally leak their internal "harmony" channel
+      // markers (e.g. "<|channel|>commentary") into a tool name or fail to
+      // produce valid tool-call JSON — both are transient model glitches,
+      // not logic errors, and usually succeed on retry. These are near-free
+      // to retry (no real wait needed), unlike rate limits, so they get a
+      // more generous budget — the free 20b model hits this often enough
+      // that 3 attempts wasn't always enough.
       const isMalformedToolCall =
-        error?.status === 400 && /parse tool call arguments/i.test(message);
+        error?.status === 400 &&
+        (/parse tool call arguments/i.test(message) ||
+          /tool call validation failed/i.test(message) ||
+          /<\|channel\|>/.test(message));
 
-      if ((!isRateLimit && !isMalformedToolCall) || attempt === maxRetries) {
+      if (isRateLimit) {
+        rateLimitAttempts++;
+        if (rateLimitAttempts > maxRateLimitRetries) throw error;
+      } else if (isMalformedToolCall) {
+        malformedAttempts++;
+        if (malformedAttempts > maxMalformedRetries) throw error;
+      } else {
         throw error;
       }
 
