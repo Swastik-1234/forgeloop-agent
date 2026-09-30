@@ -112,13 +112,14 @@ const STAGE_LABELS: Record<string, string> = {
 
 const formatAgentEvent = (event: WebSocketEvent): FormattedAgentEvent | null => {
   switch (event.e) {
-    // Connection events
-    case "connected": {
-      return {
-        type: "TEXT_MESSAGE",
-        contents: `Connected to project${event.authenticated ? " (authenticated)" : ""}`,
-      };
-    }
+    // Connection status is already shown in the header (the "• Connected"
+    // indicator) — don't turn it into a chat message. Doing so previously
+    // made `messages` non-empty the instant the socket connected, which
+    // permanently blocked the auto-bootstrap effect below (it only fires
+    // when `messages.length === 0`), so the initial prompt was silently
+    // never sent.
+    case "connected":
+      return null;
 
     // Stage updates - don't create messages for these, they're handled separately
     case "stage_update":
