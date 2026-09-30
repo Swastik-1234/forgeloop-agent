@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: likeable-postgres
+    environment:
+      POSTGRES_USER: likeable
+      POSTGRES_PASSWORD: likeable
+      POSTGRES_DB: likeable
+    ports:
+      - "5434:5432"
+    volumes:
+      - likeable-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U likeable -d likeable"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  likeable-postgres-data:

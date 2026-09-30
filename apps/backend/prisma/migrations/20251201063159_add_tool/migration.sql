@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "ToolCall" ADD VALUE 'ADD_DEPENDENCY';

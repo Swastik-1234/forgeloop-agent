@@ -1,0 +1,86 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String    @id @default(uuid())
+  email     String    @unique
+  password  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  projects  Project[]
+}
+
+model Project {
+  id            String         @id @default(uuid())
+  title         String
+  initialPrompt String
+  userId        String
+  user          User           @relation(fields: [userId], references: [id])
+  sandboxId     String?
+  sandboxUrl    String?
+  conversations Conversation[]
+  files         ProjectFile[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model Conversation {
+  id        String           @id @default(uuid())
+  projectId String
+  from      MessageFrom
+  type      ConversationType
+  project   Project          @relation(fields: [projectId], references: [id])
+  contents  String
+  toolCall  ToolCall?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+}
+
+enum ConversationType {
+  TOOL_CALL
+  TEXT_MESSAGE
+  ERROR_MESSAGE
+}
+
+enum MessageFrom {
+  USER
+  AGENT
+}
+
+enum ToolCall {
+  CREATE_FILE
+  READ_FILE
+  DELETE_FILE
+  EXECUTE_COMMAND
+  RENAME_FILE
+  LIST_DIRECTORIES
+  TEST_BUILD
+  WRITE_MULTIPLE_FILES
+  CHECK_MISSING_DEPENDENCIES
+  ADD_DEPENDENCY
+}
+
+model ProjectFile {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  path      String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, path])
+  @@index([projectId])
+}
